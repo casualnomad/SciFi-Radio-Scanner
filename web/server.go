@@ -22,6 +22,13 @@ func New(llmClient *llm.Client, state *radio.WorldState) *Server {
 
 func (s *Server) HandleNext(w http.ResponseWriter, r *http.Request) {
 	ch := radio.Channel(r.URL.Query().Get("channel"))
+	if !ch.Valid() {
+		http.Error(w, "unknown channel: "+string(ch), http.StatusBadRequest)
+		return
+	}
+
+	// Build the message list to send, mutating shared state under the lock.
+	s.State.Mu.Lock()
 
 	// Init history if empty
 	if len(s.State.History[ch]) == 0 {
@@ -39,17 +46,25 @@ func (s *Server) HandleNext(w http.ResponseWriter, r *http.Request) {
 	}
 	s.State.History[ch] = append(s.State.History[ch], userMsg)
 
+	// Snapshot the history so the (potentially slow) LLM call happens
+	// without holding the lock.
+	messages := toLLMMessages(s.State.History[ch])
+	s.State.Mu.Unlock()
+
 	// Call LLM with full history
-	text, err := s.Llm.Chat(toLLMMessages(s.State.History[ch]), 200)
+	text, err := s.Llm.Chat(messages, 200)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	// Append assistant responce to history
+	// Append assistant response to history
+	s.State.Mu.Lock()
 	s.State.History[ch] = append(s.State.History[ch], radio.ChatMessage{
 		Role:    "assistant",
 		Content: text,
 	})
+	s.State.Mu.Unlock()
 
 	// send response
 	json.NewEncoder(w).Encode(map[string]string{

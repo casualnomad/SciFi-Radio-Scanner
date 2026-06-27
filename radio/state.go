@@ -1,5 +1,7 @@
 package radio
 
+import "sync"
+
 type Channel string
 
 const (
@@ -8,7 +10,21 @@ const (
 	Anomaly  Channel = "anomaly"
 )
 
+// Valid reports whether ch is a known channel.
+func (ch Channel) Valid() bool {
+	switch ch {
+	case Civilian, Military, Anomaly:
+		return true
+	default:
+		return false
+	}
+}
+
 type WorldState struct {
+	// Mu guards all mutable fields below; take it for any read or write
+	// of the world state from a request handler.
+	Mu sync.Mutex
+
 	CivilianShips []string
 	MilitaryUnits []string
 	AnomaliesSeen int
